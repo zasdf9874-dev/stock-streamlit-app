@@ -1,0 +1,7 @@
+pandas
+numpy
+pandas-ta
+streamlit
+yfinance
+gspread
+google-auth
