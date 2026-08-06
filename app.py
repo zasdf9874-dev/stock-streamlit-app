@@ -310,7 +310,7 @@ with tab_watchlist:
         return pd.DataFrame(rows)
 
     def color_performance(val):
-        if "Up" in str(val): return "color: #008000; font-weight: bold; text-align: center;"  
+        if "Up" in str(val): return "color: #1B5E20; font-weight: bold; text-align: center;"  
         elif "Down" in str(val): return "color: #D32F2F; font-weight: bold; text-align: center;"  
         return "text-align: center;"
 
@@ -414,7 +414,10 @@ with tab_portfolio:
         ticker = item["ticker"]
         name = next((w["name"] for w in st.session_state.watchlist_data if w["ticker"] == ticker), ticker)
         
-        invested = item["entry_price"] * item["qty"]
+        entry_price = item["entry_price"]
+        actual_qty = item["qty"]
+        invested = entry_price * actual_qty
+        
         current_price = 0.0
         today_change_pct = 0.0
         
@@ -428,16 +431,25 @@ with tab_portfolio:
                     today_change_pct = ((current_price - prev_close) / prev_close) * 100
         except: pass
         
+        # Standardized 1 Lakh Capital Calculation
+        std_capital = 100000.0
+        std_qty = round(std_capital / entry_price) if entry_price > 0 else 0
+        std_invested = entry_price * std_qty
+        
         if item["status"] == "Live":
-            current_value = current_price * item["qty"]
+            current_value = current_price * actual_qty
+            std_current_value = current_price * std_qty
             days_in = max(1, (datetime.today() - datetime.strptime(item["entry_date"], "%Y-%m-%d")).days)
         else:
-            current_value = item["exit_price"] * item["qty"]
+            current_value = item["exit_price"] * actual_qty
+            std_current_value = item["exit_price"] * std_qty
             try: days_in = max(1, (datetime.strptime(item["exit_date"], "%Y-%m-%d") - datetime.strptime(item["entry_date"], "%Y-%m-%d")).days)
             except: days_in = 1
             
-        pnl = current_value - invested
-        overall_change = (pnl / invested) * 100 if invested > 0 else 0
+        actual_pnl = current_value - invested
+        total_pnl = std_current_value - std_invested
+        
+        overall_change = (actual_pnl / invested) * 100 if invested > 0 else 0
         
         port_rows.append({
             "_row_idx": item["row_idx"],
@@ -445,12 +457,13 @@ with tab_portfolio:
             "Price": current_price,
             "Today\nChange %": today_change_pct,
             "Overall\nChange %": overall_change,
-            "PNL": pnl,
+            "Total PNL": total_pnl,
+            "PNL": actual_pnl,
             "Days\nIn": days_in,
             "Invested\nAmount": invested,
             "Current\nValue": current_value,
-            "Entry\nPrice": item["entry_price"],
-            "Qty": item["qty"],
+            "Entry\nPrice": entry_price,
+            "Qty": actual_qty,
             "Entry\nDate": item["entry_date"],
             "Exit\nPrice": item["exit_price"],
             "Exit\nDate": item["exit_date"],
@@ -469,25 +482,25 @@ with tab_portfolio:
                 if row["Current\nValue"] < row["Invested\nAmount"]:
                     colors[cv_idx] = 'color: #FF5252; font-weight: bold;'
                 elif row["Current\nValue"] > row["Invested\nAmount"]:
-                    colors[cv_idx] = 'color: #00E676; font-weight: bold;'
+                    colors[cv_idx] = 'color: #1B5E20; font-weight: bold;'
                 return colors
 
             def metric_color(val):
-                if type(val) in [float, int]:
-                    if val > 0: return 'color: #00E676; font-weight: bold;'
+                if isinstance(val, (float, int, np.floating, np.integer)):
+                    if val > 0: return 'color: #1B5E20; font-weight: bold;'  # Dark Green
                     elif val < 0: return 'color: #FF5252; font-weight: bold;'
                 return ''
 
             s = df.style.apply(current_val_color, axis=1)
-            s = s.map(metric_color, subset=["PNL", "Today\nChange %", "Overall\nChange %"])
+            s = s.map(metric_color, subset=["Total PNL", "PNL", "Today\nChange %", "Overall\nChange %"])
             return s
         
         edited_df = st.data_editor(
             style_portfolio(df_port),
             use_container_width=True,
             hide_index=True,
-            column_order=["Stock", "Price", "Today\nChange %", "Overall\nChange %", "PNL", "Days\nIn", "Invested\nAmount", "Current\nValue", "Entry\nPrice", "Qty", "Entry\nDate", "Exit\nPrice", "Exit\nDate", "Status"],
-            disabled=["Stock", "Price", "Today\nChange %", "Overall\nChange %", "PNL", "Days\nIn", "Invested\nAmount", "Current\nValue", "Entry\nPrice", "Qty", "Entry\nDate"],
+            column_order=["Stock", "Price", "Today\nChange %", "Overall\nChange %", "Total PNL", "PNL", "Days\nIn", "Invested\nAmount", "Current\nValue", "Entry\nPrice", "Qty", "Entry\nDate", "Exit\nPrice", "Exit\nDate", "Status"],
+            disabled=["Stock", "Price", "Today\nChange %", "Overall\nChange %", "Total PNL", "PNL", "Days\nIn", "Invested\nAmount", "Current\nValue", "Entry\nPrice", "Qty", "Entry\nDate"],
             column_config={
                 "_row_idx": None,
                 "Status": st.column_config.SelectboxColumn("Status", options=["Live", "Exited"], required=True),
@@ -495,7 +508,8 @@ with tab_portfolio:
                 "Price": st.column_config.NumberColumn(format="%.2f"),
                 "Today\nChange %": st.column_config.NumberColumn(format="%.2f%%"),
                 "Overall\nChange %": st.column_config.NumberColumn(format="%.2f%%"),
-                "PNL": st.column_config.NumberColumn(format="%.2f"),
+                "Total PNL": st.column_config.NumberColumn("Total PNL", format="%.2f", help="Standardized PNL based on ₹1 Lakh capital"),
+                "PNL": st.column_config.NumberColumn("Actual PNL", format="%.2f", help="Actual PNL based on actual holding quantity"),
                 "Invested\nAmount": st.column_config.NumberColumn(format="%.2f"),
                 "Current\nValue": st.column_config.NumberColumn(format="%.2f"),
                 "Entry\nPrice": st.column_config.NumberColumn(format="%.2f"),
