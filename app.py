@@ -104,6 +104,30 @@ def apply_styles(df):
     styled = styled.set_table_styles(bold_header_styles)
     return styled
 
+def apply_sell_styles(df):
+    sub_cols = [
+        ("Daily", "EMA"), ("Daily", "MACD"), ("Daily", "ST"), ("Daily", "RSI"),
+        (" ", " "),
+        ("Weekly", "EMA"), ("Weekly", "MACD"), ("Weekly", "ST"), ("Weekly", "RSI"),
+        ("  ", "  "),
+        ("Monthly", "EMA"), ("Monthly", "MACD"), ("Monthly", "ST"), ("Monthly", "RSI")
+    ]
+    styled = df.style.map(color_trend_cells, subset=sub_cols)
+    
+    def style_overall_pct(val):
+        if isinstance(val, (int, float)):
+            if val < 0:
+                return 'color: #D32F2F; font-weight: bold; text-align: center;'
+            elif val > 0:
+                return 'color: #1B5E20; font-weight: bold; text-align: center;'
+        return 'text-align: center;'
+
+    styled = styled.map(style_overall_pct, subset=[("Overall %", "")])
+    styled = styled.set_properties(subset=[("Price ($/₹)", ""), ("Bought Price", "")], **{'text-align': 'center'})
+    styled = styled.format({("Price ($/₹)", ""): "{:.2f}", ("Bought Price", ""): "{:.2f}", ("Overall %", ""): "{:.2f}%"}) 
+    styled = styled.set_table_styles(bold_header_styles)
+    return styled
+
 # ---------------------------------------------------------
 # LOAD SESSION STATES
 # ---------------------------------------------------------
@@ -158,13 +182,11 @@ if "portfolio_data" not in st.session_state:
             })
     st.session_state.portfolio_data = port_records
 
-live_portfolio_tickers = [item["ticker"] for item in st.session_state.portfolio_data if item.get("status") == "Live"]
-
 # ---------------------------------------------------------
 # 1. TOP NAVIGATION (TABS)
 # ---------------------------------------------------------
-tab_watchlist, tab_portfolio, tab_buy, tab_strong_up, tab_uptrend, tab_downtrend = st.tabs(
-    ["📋 Watchlist", "💼 Portfolio", "🟢 Buy Signal", "🔥 Strong Uptrend", "📈 Uptrend Stocks", "📉 Downtrend Stocks"]
+tab_watchlist, tab_portfolio, tab_sell, tab_buy, tab_strong_up, tab_uptrend, tab_downtrend = st.tabs(
+    ["📋 Watchlist", "💼 Portfolio", "🔴 Sell Stock", "🟢 Buy Signal", "🔥 Strong Uptrend", "📈 Uptrend Stocks", "📉 Downtrend Stocks"]
 )
 
 # ---------------------------------------------------------
@@ -487,7 +509,7 @@ with tab_portfolio:
 
             def metric_color(val):
                 if isinstance(val, (float, int, np.floating, np.integer)):
-                    if val > 0: return 'color: #1B5E20; font-weight: bold;'  # Dark Green
+                    if val > 0: return 'color: #1B5E20; font-weight: bold;'
                     elif val < 0: return 'color: #FF5252; font-weight: bold;'
                 return ''
 
@@ -540,13 +562,17 @@ with tab_portfolio:
 # CENTRAL MARKET SCANNER (MUTUALLY EXCLUSIVE TABS)
 # ---------------------------------------------------------
 @st.cache_data(ttl=120, show_spinner=False)
-def fetch_all_scanners_cached(items_tuple, live_ports):
-    buy_rows, strong_up_rows, up_rows, down_rows = [], [], [], []
+def fetch_all_scanners_cached(watchlist_tuple, portfolio_tuple):
+    buy_rows, strong_up_rows, up_rows, down_rows, sell_rows = [], [], [], [], []
     
-    for ticker, name in items_tuple:
-        # Exclude active/live portfolio stocks completely from all scanners
-        if ticker in live_ports:
-            continue
+    wl_dict = dict(watchlist_tuple)
+    port_dict = dict(portfolio_tuple) # Ticker -> Entry Price for Live positions
+    
+    all_tickers = set(wl_dict.keys()).union(set(port_dict.keys()))
+    
+    for ticker in all_tickers:
+        name = wl_dict.get(ticker, ticker)
+        is_live_portfolio = ticker in port_dict
             
         try:
             stock = yf.Ticker(ticker)
@@ -596,9 +622,7 @@ def fetch_all_scanners_cached(items_tuple, live_ports):
             
             price = sig_d["price"] if sig_d else (sig_w["price"] if sig_w else (sig_m["price"] if sig_m else 0))
             
-            row = {
-                ("Stock", ""): name,
-                ("Price ($/₹)", ""): price,
+            row_base = {
                 ("Daily", "EMA"): sig_d["ema"] if sig_d else "-",
                 ("Daily", "MACD"): sig_d["macd"] if sig_d else "-",
                 ("Daily", "ST"): sig_d["st"] if sig_d else "-",
@@ -615,59 +639,77 @@ def fetch_all_scanners_cached(items_tuple, live_ports):
                 ("Monthly", "RSI"): sig_m["rsi"] if sig_m else "-",
             }
             
-            # Count bullish indicators for each timeframe
-            d_bulls = sum(1 for k in ["ema", "macd", "st", "rsi"] if sig_d and sig_d[k] == "Bullish")
-            w_bulls = sum(1 for k in ["ema", "macd", "st", "rsi"] if sig_w and sig_w[k] == "Bullish")
-            m_bulls = sum(1 for k in ["ema", "macd", "st", "rsi"] if sig_m and sig_m[k] == "Bullish")
-
-            # Evaluate Monthly 3-Month Reversal Lookback
-            has_fresh_reversal = False
-            if m_res:
-                _, m_hist, m_eval_fn = m_res
-                # Require at least 34 monthly candles to evaluate -4 safely
-                if len(m_hist) >= 34:
-                    sig_m_prev1 = m_eval_fn(m_hist.iloc[-2])
-                    sig_m_prev2 = m_eval_fn(m_hist.iloc[-3])
-                    sig_m_prev3 = m_eval_fn(m_hist.iloc[-4])
-
-                    # Only check EMA, MACD, and Supertrend for the 3-month trend reversal (RSI excluded)
-                    for k in ["ema", "macd", "st"]:
-                        if sig_m[k] == "Bullish":
-                            if (sig_m_prev1[k] == "Bearish" and 
-                                sig_m_prev2[k] == "Bearish" and 
-                                sig_m_prev3[k] == "Bearish"):
-                                has_fresh_reversal = True
-                                break
-
-            # Mutually Exclusive Scanner Pipeline Logic
-            # 1. Buy Signal: Monthly >= 2 Bullish AND at least 1 indicator is a fresh reversal from 3 consecutive bearish months
-            is_buy = (m_bulls >= 2) and has_fresh_reversal
-
-            # 2. Strong Uptrend: Monthly >= 2 Bullish, but NOT a fresh reversal
-            is_strong_uptrend = (m_bulls >= 2) and not is_buy
-
-            # 3. Uptrend: Daily >= 2 Bullish OR Weekly >= 2 Bullish
-            is_uptrend = ((d_bulls >= 2) or (w_bulls >= 2)) and not (is_buy or is_strong_uptrend)
-
-            if is_buy:
-                buy_rows.append(row)
-            elif is_strong_uptrend:
-                strong_up_rows.append(row)
-            elif is_uptrend:
-                up_rows.append(row)
+            if is_live_portfolio:
+                # 1. Sell Stock Logic (Only for active portfolio holdings)
+                # Count Bearish indicators on Monthly timeframe
+                m_bearish = sum(1 for k in ["ema", "macd", "st", "rsi"] if sig_m and sig_m[k] == "Bearish")
+                
+                if m_bearish >= 2:
+                    entry_price = port_dict[ticker]
+                    overall_pct = ((price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
+                    
+                    sell_row = {
+                        ("Stock", ""): name,
+                        ("Price ($/₹)", ""): price,
+                        ("Bought Price", ""): entry_price,
+                        ("Overall %", ""): overall_pct,
+                        **row_base
+                    }
+                    sell_rows.append(sell_row)
+                    
             else:
-                down_rows.append(row) 
+                # 2. General Screener Logic (For Watchlist items NOT currently in portfolio)
+                d_bulls = sum(1 for k in ["ema", "macd", "st", "rsi"] if sig_d and sig_d[k] == "Bullish")
+                w_bulls = sum(1 for k in ["ema", "macd", "st", "rsi"] if sig_w and sig_w[k] == "Bullish")
+                m_bulls = sum(1 for k in ["ema", "macd", "st", "rsi"] if sig_m and sig_m[k] == "Bullish")
+
+                has_fresh_reversal = False
+                if m_res:
+                    _, m_hist, m_eval_fn = m_res
+                    if len(m_hist) >= 34:
+                        sig_m_prev1 = m_eval_fn(m_hist.iloc[-2])
+                        sig_m_prev2 = m_eval_fn(m_hist.iloc[-3])
+                        sig_m_prev3 = m_eval_fn(m_hist.iloc[-4])
+
+                        for k in ["ema", "macd", "st"]:
+                            if sig_m[k] == "Bullish":
+                                if (sig_m_prev1[k] == "Bearish" and 
+                                    sig_m_prev2[k] == "Bearish" and 
+                                    sig_m_prev3[k] == "Bearish"):
+                                    has_fresh_reversal = True
+                                    break
+
+                is_buy = (m_bulls >= 2) and has_fresh_reversal
+                is_strong_uptrend = (m_bulls >= 2) and not is_buy
+                is_uptrend = ((d_bulls >= 2) or (w_bulls >= 2)) and not (is_buy or is_strong_uptrend)
+
+                row = {
+                    ("Stock", ""): name,
+                    ("Price ($/₹)", ""): price,
+                    **row_base
+                }
+
+                if is_buy:
+                    buy_rows.append(row)
+                elif is_strong_uptrend:
+                    strong_up_rows.append(row)
+                elif is_uptrend:
+                    up_rows.append(row)
+                else:
+                    down_rows.append(row) 
                 
         except Exception:
             continue
             
-    return buy_rows, strong_up_rows, up_rows, down_rows
+    return buy_rows, strong_up_rows, up_rows, down_rows, sell_rows
 
 with st.spinner("Scanning Market Data & Evaluating Timeframes..."):
-    items_tuple = tuple((item["ticker"], item.get("name", item["ticker"])) for item in st.session_state.watchlist_data if "ticker" in item)
-    buy_data, strong_up_data, up_data, down_data = fetch_all_scanners_cached(items_tuple, tuple(live_portfolio_tickers))
+    watchlist_tuple = tuple((item["ticker"], item.get("name", item["ticker"])) for item in st.session_state.watchlist_data if "ticker" in item)
+    portfolio_tuple = tuple((p["ticker"], p["entry_price"]) for p in st.session_state.portfolio_data if p["status"] == "Live")
+    
+    buy_data, strong_up_data, up_data, down_data, sell_data = fetch_all_scanners_cached(watchlist_tuple, portfolio_tuple)
 
-multi_cols = pd.MultiIndex.from_tuples([
+multi_cols_standard = pd.MultiIndex.from_tuples([
     ("Stock", ""), ("Price ($/₹)", ""),
     ("Daily", "EMA"), ("Daily", "MACD"), ("Daily", "ST"), ("Daily", "RSI"),
     (" ", " "), 
@@ -676,13 +718,35 @@ multi_cols = pd.MultiIndex.from_tuples([
     ("Monthly", "EMA"), ("Monthly", "MACD"), ("Monthly", "ST"), ("Monthly", "RSI")
 ])
 
-df_buy = pd.DataFrame(buy_data, columns=multi_cols) if buy_data else pd.DataFrame()
-df_strong_uptrend = pd.DataFrame(strong_up_data, columns=multi_cols) if strong_up_data else pd.DataFrame()
-df_uptrend = pd.DataFrame(up_data, columns=multi_cols) if up_data else pd.DataFrame()
-df_downtrend = pd.DataFrame(down_data, columns=multi_cols) if down_data else pd.DataFrame()
+multi_cols_sell = pd.MultiIndex.from_tuples([
+    ("Stock", ""), ("Price ($/₹)", ""), ("Bought Price", ""), ("Overall %", ""),
+    ("Daily", "EMA"), ("Daily", "MACD"), ("Daily", "ST"), ("Daily", "RSI"),
+    (" ", " "), 
+    ("Weekly", "EMA"), ("Weekly", "MACD"), ("Weekly", "ST"), ("Weekly", "RSI"),
+    ("  ", "  "), 
+    ("Monthly", "EMA"), ("Monthly", "MACD"), ("Monthly", "ST"), ("Monthly", "RSI")
+])
+
+df_buy = pd.DataFrame(buy_data, columns=multi_cols_standard) if buy_data else pd.DataFrame()
+df_strong_uptrend = pd.DataFrame(strong_up_data, columns=multi_cols_standard) if strong_up_data else pd.DataFrame()
+df_uptrend = pd.DataFrame(up_data, columns=multi_cols_standard) if up_data else pd.DataFrame()
+df_downtrend = pd.DataFrame(down_data, columns=multi_cols_standard) if down_data else pd.DataFrame()
+df_sell = pd.DataFrame(sell_data, columns=multi_cols_sell) if sell_data else pd.DataFrame()
 
 # ---------------------------------------------------------
-# 4. BUY SIGNAL TAB (FRESH REVERSALS)
+# 4. SELL STOCK TAB (PORTFOLIO WARNINGS)
+# ---------------------------------------------------------
+with tab_sell:
+    st.write("")
+    if not df_sell.empty:
+        st.markdown("---")
+        st.dataframe(apply_sell_styles(df_sell), hide_index=True, use_container_width=True)
+    else:
+        st.markdown("---")
+        st.info("Great news! None of your active portfolio holdings are currently showing 2 or more Monthly Bearish indicators.")
+
+# ---------------------------------------------------------
+# 5. BUY SIGNAL TAB (FRESH REVERSALS)
 # ---------------------------------------------------------
 with tab_buy:
     st.write("")
@@ -694,7 +758,7 @@ with tab_buy:
         st.info("No stocks in your watchlist currently meet the fresh 3-Month Reversal Buy Signal criteria.")
 
 # ---------------------------------------------------------
-# 5. STRONG UPTREND TAB (ESTABLISHED MONTHLY BULLS)
+# 6. STRONG UPTREND TAB (ESTABLISHED MONTHLY BULLS)
 # ---------------------------------------------------------
 with tab_strong_up:
     st.write("")
@@ -706,7 +770,7 @@ with tab_strong_up:
         st.info("No stocks in your watchlist currently meet the Strong Uptrend conditions.")
 
 # ---------------------------------------------------------
-# 6. UPTREND STOCKS TAB
+# 7. UPTREND STOCKS TAB
 # ---------------------------------------------------------
 with tab_uptrend:
     st.write("")
@@ -718,7 +782,7 @@ with tab_uptrend:
         st.info("No stocks in your watchlist currently meet the Uptrend conditions.")
 
 # ---------------------------------------------------------
-# 7. DOWNTREND STOCKS TAB
+# 8. DOWNTREND STOCKS TAB
 # ---------------------------------------------------------
 with tab_downtrend:
     st.write("")
