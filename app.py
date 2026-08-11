@@ -495,7 +495,7 @@ with tab_portfolio:
     if port_rows:
         df_port = pd.DataFrame(port_rows)
         df_port["_sort"] = df_port["Status"].apply(lambda x: 0 if x == "Live" else 1)
-        df_port = df_port.sort_values(by=["_sort", "Invested\nAmount"], ascending=[True, False]).drop(columns=["_sort"]).reset_index(drop=True)
+        df_port = df_port.sort_values(by=["_sort", "Overall\nChange %"], ascending=[True, True]).drop(columns=["_sort"]).reset_index(drop=True)
         
         def style_portfolio(df):
             def current_val_color(row):
