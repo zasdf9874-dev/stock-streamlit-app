@@ -499,7 +499,7 @@ with tab_portfolio:
         df_port["_sort"] = df_port["Status"].apply(lambda x: 0 if x == "Live" else 1)
         df_port = df_port.sort_values(by=["_sort", "Overall\nChange %"], ascending=[True, True]).drop(columns=["_sort"]).reset_index(drop=True)
         
-       # --- NEW: PORTFOLIO SUMMARY METRICS ---
+# --- NEW: PORTFOLIO SUMMARY METRICS ---
         live_df = df_port[df_port["Status"] == "Live"]
         
         if not live_df.empty:
@@ -522,27 +522,45 @@ with tab_portfolio:
             paper_pnl = live_df["Total PNL"].sum()
             paper_pct = (paper_pnl / paper_invested) * 100 if paper_invested > 0 else 0
 
-            # UI Logic: Custom HTML for colored metrics
-            c_pnl = "#1B5E20" if tot_pnl >= 0 else "#D32F2F"
-            c_today = "#1B5E20" if today_pct >= 0 else "#D32F2F"
-            c_paper = "#1B5E20" if paper_pnl >= 0 else "#D32F2F"
+            # UI Logic: Custom HTML to mimic st.metric perfectly but with colored main text
+            def metric_html(label, val_str, val_num, delta_str=None, delta_num=None, default_color=False):
+                # Using Streamlit's native bright green and red for consistency
+                green_hex = "#09AB3B" 
+                red_hex = "#FF2B2B"
+                
+                v_color = "" if default_color else (f"color: {green_hex};" if val_num >= 0 else f"color: {red_hex};")
+                
+                html = f"<div style='font-size: 14px; color: gray; margin-bottom: 4px;'>{label}</div>"
+                html += f"<div style='font-size: 28px; font-weight: bold; {v_color} line-height: 1.2;'>{val_str}</div>"
+                
+                if delta_str is not None and delta_num is not None:
+                    if delta_num >= 0:
+                        bg_c = "rgba(9, 171, 59, 0.15)"
+                        txt_c = green_hex
+                        arrow = "↑"
+                    else:
+                        bg_c = "rgba(255, 43, 43, 0.15)"
+                        txt_c = red_hex
+                        arrow = "↓"
+                    html += f"<div style='margin-top: 6px;'><span style='background-color: {bg_c}; color: {txt_c}; border-radius: 4px; padding: 2px 6px; font-size: 13px; font-weight: 600;'>{arrow} {delta_str}</span></div>"
+                return html
 
             # UI: Actual Metrics Row
             st.caption("ACTUAL PORTFOLIO")
             c1, c2, c3, c4 = st.columns(4)
-            c1.markdown(f"<div style='font-size: 14px; color: gray;'>Invested Amount</div><div style='font-size: 28px; font-weight: bold;'>₹{tot_invested:,.2f}</div>", unsafe_allow_html=True)
-            c2.markdown(f"<div style='font-size: 14px; color: gray;'>Current Value</div><div style='font-size: 28px; font-weight: bold; color: {c_pnl};'>₹{tot_current:,.2f}</div>", unsafe_allow_html=True)
-            c3.markdown(f"<div style='font-size: 14px; color: gray;'>Total PNL</div><div style='font-size: 28px; font-weight: bold; color: {c_pnl};'>₹{tot_pnl:,.2f} <span style='font-size: 16px;'>({tot_pct:.2f}%)</span></div>", unsafe_allow_html=True)
-            c4.markdown(f"<div style='font-size: 14px; color: gray;'>Today's Change</div><div style='font-size: 28px; font-weight: bold; color: {c_today};'>{today_pct:.2f}% <span style='font-size: 16px;'>(₹{today_abs:,.2f})</span></div>", unsafe_allow_html=True)
+            c1.markdown(metric_html("Invested Amount", f"₹{tot_invested:,.2f}", tot_invested, default_color=True), unsafe_allow_html=True)
+            c2.markdown(metric_html("Current Value", f"₹{tot_current:,.2f}", tot_pnl), unsafe_allow_html=True)
+            c3.markdown(metric_html("Total PNL", f"₹{tot_pnl:,.2f}", tot_pnl, f"{abs(tot_pct):.2f}% Overall", tot_pct), unsafe_allow_html=True)
+            c4.markdown(metric_html("Today's Change", f"{today_pct:+.2f}%" if today_pct > 0 else f"{today_pct:.2f}%", today_pct, f"₹{abs(today_abs):.2f} Today", today_abs), unsafe_allow_html=True)
             
-            st.write("") # Small vertical spacer
+            st.write("") # Vertical spacer
             
             # UI: Paper Metrics Row
             st.caption("PAPER PORTFOLIO (1 LAKH STANDARD)")
             pc1, pc2, pc3, pc4 = st.columns(4)
-            pc1.markdown(f"<div style='font-size: 14px; color: gray;'>Paper Invested</div><div style='font-size: 28px; font-weight: bold;'>₹{paper_invested:,.2f}</div>", unsafe_allow_html=True)
-            pc2.markdown(f"<div style='font-size: 14px; color: gray;'>Paper Current Value</div><div style='font-size: 28px; font-weight: bold; color: {c_paper};'>₹{paper_current:,.2f}</div>", unsafe_allow_html=True)
-            pc3.markdown(f"<div style='font-size: 14px; color: gray;'>Paper Total PNL</div><div style='font-size: 28px; font-weight: bold; color: {c_paper};'>₹{paper_pnl:,.2f} <span style='font-size: 16px;'>({paper_pct:.2f}%)</span></div>", unsafe_allow_html=True)
+            pc1.markdown(metric_html("Paper Invested", f"₹{paper_invested:,.2f}", paper_invested, default_color=True), unsafe_allow_html=True)
+            pc2.markdown(metric_html("Paper Current Value", f"₹{paper_current:,.2f}", paper_pnl), unsafe_allow_html=True)
+            pc3.markdown(metric_html("Paper Total PNL", f"₹{paper_pnl:,.2f}", paper_pnl, f"{abs(paper_pct):.2f}% Overall", paper_pct), unsafe_allow_html=True)
             pc4.empty() # Placeholder for layout alignment
             
             st.markdown("---")
