@@ -499,7 +499,7 @@ with tab_portfolio:
         df_port["_sort"] = df_port["Status"].apply(lambda x: 0 if x == "Live" else 1)
         df_port = df_port.sort_values(by=["_sort", "Overall\nChange %"], ascending=[True, True]).drop(columns=["_sort"]).reset_index(drop=True)
         
-        # --- NEW: PORTFOLIO SUMMARY METRICS ---
+       # --- NEW: PORTFOLIO SUMMARY METRICS ---
         live_df = df_port[df_port["Status"] == "Live"]
         
         if not live_df.empty:
@@ -513,7 +513,8 @@ with tab_portfolio:
             
             # Math: Weighted Today's Change
             yest_value = (live_df["Current\nValue"] / (1 + (live_df["Today\nChange %"] / 100))).sum()
-            today_pct = ((tot_current - yest_value) / yest_value) * 100 if yest_value > 0 else 0
+            today_abs = tot_current - yest_value
+            today_pct = (today_abs / yest_value) * 100 if yest_value > 0 else 0
             
             # Math: Paper Portfolio
             paper_invested = live_df["_std_invested"].sum()
@@ -521,20 +522,27 @@ with tab_portfolio:
             paper_pnl = live_df["Total PNL"].sum()
             paper_pct = (paper_pnl / paper_invested) * 100 if paper_invested > 0 else 0
 
+            # UI Logic: Custom HTML for colored metrics
+            c_pnl = "#1B5E20" if tot_pnl >= 0 else "#D32F2F"
+            c_today = "#1B5E20" if today_pct >= 0 else "#D32F2F"
+            c_paper = "#1B5E20" if paper_pnl >= 0 else "#D32F2F"
+
             # UI: Actual Metrics Row
             st.caption("ACTUAL PORTFOLIO")
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Invested Amount", f"₹{tot_invested:,.2f}")
-            c2.metric("Current Value", f"₹{tot_current:,.2f}")
-            c3.metric("Total PNL", f"₹{tot_pnl:,.2f}", f"{tot_pct:.2f}% Overall")
-            c4.metric("Today's Change", f"{today_pct:.2f}%", f"{tot_current - yest_value:,.2f} Today")
+            c1.markdown(f"<div style='font-size: 14px; color: gray;'>Invested Amount</div><div style='font-size: 28px; font-weight: bold;'>₹{tot_invested:,.2f}</div>", unsafe_allow_html=True)
+            c2.markdown(f"<div style='font-size: 14px; color: gray;'>Current Value</div><div style='font-size: 28px; font-weight: bold; color: {c_pnl};'>₹{tot_current:,.2f}</div>", unsafe_allow_html=True)
+            c3.markdown(f"<div style='font-size: 14px; color: gray;'>Total PNL</div><div style='font-size: 28px; font-weight: bold; color: {c_pnl};'>₹{tot_pnl:,.2f} <span style='font-size: 16px;'>({tot_pct:.2f}%)</span></div>", unsafe_allow_html=True)
+            c4.markdown(f"<div style='font-size: 14px; color: gray;'>Today's Change</div><div style='font-size: 28px; font-weight: bold; color: {c_today};'>{today_pct:.2f}% <span style='font-size: 16px;'>(₹{today_abs:,.2f})</span></div>", unsafe_allow_html=True)
+            
+            st.write("") # Small vertical spacer
             
             # UI: Paper Metrics Row
             st.caption("PAPER PORTFOLIO (1 LAKH STANDARD)")
             pc1, pc2, pc3, pc4 = st.columns(4)
-            pc1.metric("Paper Invested", f"₹{paper_invested:,.2f}")
-            pc2.metric("Paper Current Value", f"₹{paper_current:,.2f}")
-            pc3.metric("Paper Total PNL", f"₹{paper_pnl:,.2f}", f"{paper_pct:.2f}% Overall")
+            pc1.markdown(f"<div style='font-size: 14px; color: gray;'>Paper Invested</div><div style='font-size: 28px; font-weight: bold;'>₹{paper_invested:,.2f}</div>", unsafe_allow_html=True)
+            pc2.markdown(f"<div style='font-size: 14px; color: gray;'>Paper Current Value</div><div style='font-size: 28px; font-weight: bold; color: {c_paper};'>₹{paper_current:,.2f}</div>", unsafe_allow_html=True)
+            pc3.markdown(f"<div style='font-size: 14px; color: gray;'>Paper Total PNL</div><div style='font-size: 28px; font-weight: bold; color: {c_paper};'>₹{paper_pnl:,.2f} <span style='font-size: 16px;'>({paper_pct:.2f}%)</span></div>", unsafe_allow_html=True)
             pc4.empty() # Placeholder for layout alignment
             
             st.markdown("---")
