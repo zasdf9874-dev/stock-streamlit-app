@@ -475,6 +475,8 @@ with tab_portfolio:
         
         port_rows.append({
             "_row_idx": item["row_idx"],
+            "_std_invested": std_invested,          # Hidden column for Paper Math
+            "_std_current": std_current_value,      # Hidden column for Paper Math
             "Stock": name,
             "Price": current_price,
             "Today\nChange %": today_change_pct,
@@ -497,6 +499,48 @@ with tab_portfolio:
         df_port["_sort"] = df_port["Status"].apply(lambda x: 0 if x == "Live" else 1)
         df_port = df_port.sort_values(by=["_sort", "Overall\nChange %"], ascending=[True, True]).drop(columns=["_sort"]).reset_index(drop=True)
         
+        # --- NEW: PORTFOLIO SUMMARY METRICS ---
+        live_df = df_port[df_port["Status"] == "Live"]
+        
+        if not live_df.empty:
+            st.markdown("### 📊 Portfolio Summary")
+            
+            # Math: Actual Portfolio
+            tot_invested = live_df["Invested\nAmount"].sum()
+            tot_current = live_df["Current\nValue"].sum()
+            tot_pnl = live_df["PNL"].sum()
+            tot_pct = (tot_pnl / tot_invested) * 100 if tot_invested > 0 else 0
+            
+            # Math: Weighted Today's Change
+            yest_value = (live_df["Current\nValue"] / (1 + (live_df["Today\nChange %"] / 100))).sum()
+            today_pct = ((tot_current - yest_value) / yest_value) * 100 if yest_value > 0 else 0
+            
+            # Math: Paper Portfolio
+            paper_invested = live_df["_std_invested"].sum()
+            paper_current = live_df["_std_current"].sum()
+            paper_pnl = live_df["Total PNL"].sum()
+            paper_pct = (paper_pnl / paper_invested) * 100 if paper_invested > 0 else 0
+
+            # UI: Actual Metrics Row
+            st.caption("ACTUAL PORTFOLIO")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Invested Amount", f"₹{tot_invested:,.2f}")
+            c2.metric("Current Value", f"₹{tot_current:,.2f}")
+            c3.metric("Total PNL", f"₹{tot_pnl:,.2f}", f"{tot_pct:.2f}% Overall")
+            c4.metric("Today's Change", f"{today_pct:.2f}%", f"{tot_current - yest_value:,.2f} Today")
+            
+            # UI: Paper Metrics Row
+            st.caption("PAPER PORTFOLIO (1 LAKH STANDARD)")
+            pc1, pc2, pc3, pc4 = st.columns(4)
+            pc1.metric("Paper Invested", f"₹{paper_invested:,.2f}")
+            pc2.metric("Paper Current Value", f"₹{paper_current:,.2f}")
+            pc3.metric("Paper Total PNL", f"₹{paper_pnl:,.2f}", f"{paper_pct:.2f}% Overall")
+            pc4.empty() # Placeholder for layout alignment
+            
+            st.markdown("---")
+        # --- END OF SUMMARY METRICS ---
+
+        # --- ORIGINAL TABLE & SAVE LOGIC PRESERVED BELOW ---
         def style_portfolio(df):
             def current_val_color(row):
                 colors = [''] * len(row)
@@ -557,7 +601,6 @@ with tab_portfolio:
                 st.rerun()
     else:
         st.info("Your portfolio is currently empty. Add a trade using the menu above to get started!")
-
 # ---------------------------------------------------------
 # CENTRAL MARKET SCANNER (MUTUALLY EXCLUSIVE TABS)
 # ---------------------------------------------------------
