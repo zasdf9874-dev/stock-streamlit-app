@@ -431,7 +431,7 @@ with tab_portfolio:
                             st.success(f"Deleted {p_delete_ticker} from Portfolio. It will now return to scanners.")
                             st.rerun()
 
-port_rows = []
+    port_rows = []
     for item in st.session_state.portfolio_data:
         ticker = item["ticker"]
         name = next((w["name"] for w in st.session_state.watchlist_data if w["ticker"] == ticker), ticker)
@@ -589,7 +589,6 @@ port_rows = []
                 return ''
 
             s = df.style.apply(current_val_color, axis=1)
-            # Apply green/red coloring to these specific columns
             s = s.map(metric_color, subset=["MTF PNL", "PNL", "Today\nChange %", "Overall\nChange %"])
             return s
         
@@ -634,6 +633,7 @@ port_rows = []
                 st.rerun()
     else:
         st.info("Your portfolio is currently empty. Add a trade using the menu above to get started!")
+
 # ---------------------------------------------------------
 # CENTRAL MARKET SCANNER (MUTUALLY EXCLUSIVE TABS)
 # ---------------------------------------------------------
@@ -717,7 +717,6 @@ def fetch_all_scanners_cached(watchlist_tuple, portfolio_tuple):
             
             if is_live_portfolio:
                 # 1. Sell Stock Logic (Only for active portfolio holdings)
-                # Count Bearish indicators on Monthly timeframe
                 m_bearish = sum(1 for k in ["ema", "macd", "st", "rsi"] if sig_m and sig_m[k] == "Bearish")
                 
                 if m_bearish >= 2:
