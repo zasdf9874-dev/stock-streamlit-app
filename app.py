@@ -431,7 +431,7 @@ with tab_portfolio:
                             st.success(f"Deleted {p_delete_ticker} from Portfolio. It will now return to scanners.")
                             st.rerun()
 
-    port_rows = []
+port_rows = []
     for item in st.session_state.portfolio_data:
         ticker = item["ticker"]
         name = next((w["name"] for w in st.session_state.watchlist_data if w["ticker"] == ticker), ticker)
@@ -453,35 +453,41 @@ with tab_portfolio:
                     today_change_pct = ((current_price - prev_close) / prev_close) * 100
         except: pass
         
-        # Standardized 1 Lakh Capital Calculation
-        std_capital = 100000.0
-        std_qty = round(std_capital / entry_price) if entry_price > 0 else 0
-        std_invested = entry_price * std_qty
+        # --- MTF SIMULATOR MATH (Standard Base 20k -> 4x Leverage = 80k) ---
+        mtf_base = 20000.0
+        mtf_invested = mtf_base * 4  # The borrowed 4x amount (₹80,000)
+        mtf_qty = (mtf_invested / entry_price) if entry_price > 0 else 0
         
         if item["status"] == "Live":
             current_value = current_price * actual_qty
-            std_current_value = current_price * std_qty
+            mtf_gross_current = current_price * mtf_qty
             days_in = max(1, (datetime.today() - datetime.strptime(item["entry_date"], "%Y-%m-%d")).days)
         else:
             current_value = item["exit_price"] * actual_qty
-            std_current_value = item["exit_price"] * std_qty
+            mtf_gross_current = item["exit_price"] * mtf_qty
             try: days_in = max(1, (datetime.strptime(item["exit_date"], "%Y-%m-%d") - datetime.strptime(item["entry_date"], "%Y-%m-%d")).days)
             except: days_in = 1
             
         actual_pnl = current_value - invested
-        total_pnl = std_current_value - std_invested
-        
         overall_change = (actual_pnl / invested) * 100 if invested > 0 else 0
+        
+        # Calculate MTF outputs
+        mtf_pnl = mtf_gross_current - mtf_invested                   # Gross Profit on the 80k
+        mtf_charges = mtf_invested * 0.0004 * days_in                # Interest (0.04% per day)
+        mtf_current_value = mtf_invested + mtf_pnl - mtf_charges     # Net Current Value
         
         port_rows.append({
             "_row_idx": item["row_idx"],
-            "_std_invested": std_invested,          # Hidden column for Paper Math
-            "_std_current": std_current_value,      # Hidden column for Paper Math
+            "_mtf_invested": mtf_invested,
+            "_mtf_current": mtf_current_value,
+            "_mtf_pnl": mtf_pnl,
+            "_mtf_charges": mtf_charges,
             "Stock": name,
             "Price": current_price,
             "Today\nChange %": today_change_pct,
             "Overall\nChange %": overall_change,
-            "Total PNL": total_pnl,
+            "MTF PNL": mtf_pnl,
+            "MTF Charges": mtf_charges,
             "PNL": actual_pnl,
             "Days\nIn": days_in,
             "Invested\nAmount": invested,
@@ -499,7 +505,7 @@ with tab_portfolio:
         df_port["_sort"] = df_port["Status"].apply(lambda x: 0 if x == "Live" else 1)
         df_port = df_port.sort_values(by=["_sort", "Overall\nChange %"], ascending=[True, True]).drop(columns=["_sort"]).reset_index(drop=True)
         
-# --- NEW: PORTFOLIO SUMMARY METRICS ---
+        # --- NEW: PORTFOLIO SUMMARY METRICS ---
         live_df = df_port[df_port["Status"] == "Live"]
         
         if not live_df.empty:
@@ -516,18 +522,17 @@ with tab_portfolio:
             today_abs = tot_current - yest_value
             today_pct = (today_abs / yest_value) * 100 if yest_value > 0 else 0
             
-            # Math: Paper Portfolio
-            paper_invested = live_df["_std_invested"].sum()
-            paper_current = live_df["_std_current"].sum()
-            paper_pnl = live_df["Total PNL"].sum()
-            paper_pct = (paper_pnl / paper_invested) * 100 if paper_invested > 0 else 0
+            # Math: MTF Portfolio (4x of standard 20k base)
+            mtf_tot_invested = live_df["_mtf_invested"].sum()
+            mtf_tot_current = live_df["_mtf_current"].sum()
+            mtf_tot_pnl = live_df["_mtf_pnl"].sum()
+            mtf_tot_charges = live_df["_mtf_charges"].sum()
+            mtf_pct = (mtf_tot_pnl / mtf_tot_invested) * 100 if mtf_tot_invested > 0 else 0
 
-            # UI Logic: Custom HTML to mimic st.metric perfectly but with colored main text
+            # UI Logic: Custom HTML to mimic st.metric perfectly
             def metric_html(label, val_str, val_num, delta_str=None, delta_num=None, default_color=False):
-                # Using Streamlit's native bright green and red for consistency
                 green_hex = "#09AB3B" 
                 red_hex = "#FF2B2B"
-                
                 v_color = "" if default_color else (f"color: {green_hex};" if val_num >= 0 else f"color: {red_hex};")
                 
                 html = f"<div style='font-size: 14px; color: gray; margin-bottom: 4px;'>{label}</div>"
@@ -555,18 +560,18 @@ with tab_portfolio:
             
             st.write("") # Vertical spacer
             
-            # UI: Paper Metrics Row
-            st.caption("PAPER PORTFOLIO (1 LAKH STANDARD)")
+            # UI: MTF Metrics Row
+            st.caption("MTF PORTFOLIO (4X LEVERAGE ON ₹20K BASE)")
             pc1, pc2, pc3, pc4 = st.columns(4)
-            pc1.markdown(metric_html("Paper Invested", f"₹{paper_invested:,.2f}", paper_invested, default_color=True), unsafe_allow_html=True)
-            pc2.markdown(metric_html("Paper Current Value", f"₹{paper_current:,.2f}", paper_pnl), unsafe_allow_html=True)
-            pc3.markdown(metric_html("Paper Total PNL", f"₹{paper_pnl:,.2f}", paper_pnl, f"{abs(paper_pct):.2f}% Overall", paper_pct), unsafe_allow_html=True)
-            pc4.empty() # Placeholder for layout alignment
+            pc1.markdown(metric_html("MTF Invested", f"₹{mtf_tot_invested:,.2f}", mtf_tot_invested, default_color=True), unsafe_allow_html=True)
+            pc2.markdown(metric_html("MTF Current Value", f"₹{mtf_tot_current:,.2f}", mtf_tot_current - mtf_tot_invested), unsafe_allow_html=True)
+            pc3.markdown(metric_html("MTF Gross PNL", f"₹{mtf_tot_pnl:,.2f}", mtf_tot_pnl, f"{abs(mtf_pct):.2f}% Overall", mtf_pct), unsafe_allow_html=True)
+            pc4.markdown(metric_html("MTF Charges", f"₹{mtf_tot_charges:,.2f}", -1, "Interest (0.04%/day)", -1, default_color=True), unsafe_allow_html=True)
             
             st.markdown("---")
         # --- END OF SUMMARY METRICS ---
 
-        # --- ORIGINAL TABLE & SAVE LOGIC PRESERVED BELOW ---
+        # --- DATA EDITOR CONFIGURATION ---
         def style_portfolio(df):
             def current_val_color(row):
                 colors = [''] * len(row)
@@ -584,15 +589,16 @@ with tab_portfolio:
                 return ''
 
             s = df.style.apply(current_val_color, axis=1)
-            s = s.map(metric_color, subset=["Total PNL", "PNL", "Today\nChange %", "Overall\nChange %"])
+            # Apply green/red coloring to these specific columns
+            s = s.map(metric_color, subset=["MTF PNL", "PNL", "Today\nChange %", "Overall\nChange %"])
             return s
         
         edited_df = st.data_editor(
             style_portfolio(df_port),
             use_container_width=True,
             hide_index=True,
-            column_order=["Stock", "Price", "Today\nChange %", "Overall\nChange %", "Total PNL", "PNL", "Days\nIn", "Invested\nAmount", "Current\nValue", "Entry\nPrice", "Qty", "Entry\nDate", "Exit\nPrice", "Exit\nDate", "Status"],
-            disabled=["Stock", "Price", "Today\nChange %", "Overall\nChange %", "Total PNL", "PNL", "Days\nIn", "Invested\nAmount", "Current\nValue", "Entry\nPrice", "Qty", "Entry\nDate"],
+            column_order=["Stock", "Price", "Today\nChange %", "Overall\nChange %", "MTF PNL", "MTF Charges", "PNL", "Days\nIn", "Invested\nAmount", "Current\nValue", "Entry\nPrice", "Qty", "Entry\nDate", "Exit\nPrice", "Exit\nDate", "Status"],
+            disabled=["Stock", "Price", "Today\nChange %", "Overall\nChange %", "MTF PNL", "MTF Charges", "PNL", "Days\nIn", "Invested\nAmount", "Current\nValue", "Entry\nPrice", "Qty", "Entry\nDate"],
             column_config={
                 "_row_idx": None,
                 "Status": st.column_config.SelectboxColumn("Status", options=["Live", "Exited"], required=True),
@@ -600,8 +606,9 @@ with tab_portfolio:
                 "Price": st.column_config.NumberColumn(format="%.2f"),
                 "Today\nChange %": st.column_config.NumberColumn(format="%.2f%%"),
                 "Overall\nChange %": st.column_config.NumberColumn(format="%.2f%%"),
-                "Total PNL": st.column_config.NumberColumn("Total PNL", format="%.2f", help="Standardized PNL based on ₹1 Lakh capital"),
-                "PNL": st.column_config.NumberColumn("Actual PNL", format="%.2f", help="Actual PNL based on actual holding quantity"),
+                "MTF PNL": st.column_config.NumberColumn("MTF PNL", format="%.2f", help="Gross PNL on 4x leverage"),
+                "MTF Charges": st.column_config.NumberColumn("MTF Charges", format="%.2f", help="Total accumulated interest at 0.04% per day"),
+                "PNL": st.column_config.NumberColumn("Actual PNL", format="%.2f"),
                 "Invested\nAmount": st.column_config.NumberColumn(format="%.2f"),
                 "Current\nValue": st.column_config.NumberColumn(format="%.2f"),
                 "Entry\nPrice": st.column_config.NumberColumn(format="%.2f"),
