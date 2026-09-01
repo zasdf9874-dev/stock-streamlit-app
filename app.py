@@ -197,7 +197,7 @@ if "gtt_data" not in st.session_state:
     if len(raw_gtt) > 1:
         for i, row in enumerate(raw_gtt[1:]):
             if not row or not str(row[0]).strip(): continue
-            row = row + [""] * (8 - len(row)) # Pad empty columns
+            row = row + [""] * (8 - len(row)) 
             
             try: p1 = float(row[2]) if row[2].strip() else 0.0
             except: p1 = 0.0
@@ -281,7 +281,6 @@ with tab_watchlist:
                             if cell: db_sheet.delete_rows(cell.row)
                             st.session_state.watchlist_data = [item for item in st.session_state.watchlist_data if item.get("ticker") != delete_symbol]
                             
-                            # Clean up associated GTT if it exists
                             gtt_cell = gtt_sheet.find(delete_symbol)
                             if gtt_cell: gtt_sheet.delete_rows(gtt_cell.row)
                             st.session_state.gtt_data = [g for g in st.session_state.gtt_data if g.get("ticker") != delete_symbol]
@@ -289,7 +288,6 @@ with tab_watchlist:
                             st.rerun()
                         except Exception as e: st.error(f"Failed: {e}")
 
-    # Fallback for timeframe if expander is closed
     if "tf_watchlist" not in st.session_state:
         st.session_state.tf_watchlist = "Daily"
     timeframe = st.session_state.tf_watchlist
@@ -495,7 +493,6 @@ with tab_portfolio:
                     today_change_pct = ((current_price - prev_close) / prev_close) * 100
         except: pass
         
-        # --- MTF SIMULATOR MATH (Standard Base 20k -> 4x Leverage = 80k) ---
         mtf_base = 20000.0
         mtf_invested = mtf_base * 4  
         mtf_qty = (mtf_invested / entry_price) if entry_price > 0 else 0
@@ -513,7 +510,6 @@ with tab_portfolio:
         actual_pnl = current_value - invested
         overall_change = (actual_pnl / invested) * 100 if invested > 0 else 0
         
-        # Calculate MTF outputs
         mtf_pnl = mtf_gross_current - mtf_invested
         mtf_charges = mtf_invested * 0.0004 * days_in
         mtf_current_value = mtf_invested + mtf_pnl - mtf_charges
@@ -536,9 +532,9 @@ with tab_portfolio:
             "Current\nValue": current_value,
             "Entry\nPrice": entry_price,
             "Qty": actual_qty,
-            "Entry\nDate": item["entry_date"],
+            "Entry\nDate": item["entry_date"] if item["entry_date"].strip() else None,
             "Exit\nPrice": item["exit_price"],
-            "Exit\nDate": item["exit_date"],
+            "Exit\nDate": item["exit_date"] if item["exit_date"].strip() else None,
             "Status": item["status"]
         })
 
@@ -547,7 +543,6 @@ with tab_portfolio:
         df_port["_sort"] = df_port["Status"].apply(lambda x: 0 if x == "Live" else 1)
         df_port = df_port.sort_values(by=["_sort", "Overall\nChange %"], ascending=[True, True]).drop(columns=["_sort"]).reset_index(drop=True)
         
-        # --- NEW: PORTFOLIO SUMMARY METRICS ---
         live_df = df_port[df_port["Status"] == "Live"]
         
         if not live_df.empty:
@@ -626,40 +621,46 @@ with tab_portfolio:
             s = s.map(metric_color, subset=["MTF PNL", "PNL", "Today\nChange %", "Overall\nChange %"])
             return s
         
-        edited_df = st.data_editor(
-            style_portfolio(df_port),
-            use_container_width=True,
-            hide_index=True,
-            column_order=["Stock", "Price", "Today\nChange %", "Overall\nChange %", "MTF PNL", "MTF Charges", "PNL", "Days\nIn", "Invested\nAmount", "Current\nValue", "Entry\nPrice", "Qty", "Entry\nDate", "Exit\nPrice", "Exit\nDate", "Status"],
-            disabled=["Stock", "Price", "Today\nChange %", "Overall\nChange %", "MTF PNL", "MTF Charges", "PNL", "Days\nIn", "Invested\nAmount", "Current\nValue", "Entry\nPrice", "Qty", "Entry\nDate"],
-            column_config={
-                "_row_idx": None,
-                "Status": st.column_config.SelectboxColumn("Status", options=["Live", "Exited"], required=True),
-                "Exit\nDate": st.column_config.TextColumn("Exit\nDate", help="YYYY-MM-DD"),
-                "Price": st.column_config.NumberColumn(format="%.2f"),
-                "Today\nChange %": st.column_config.NumberColumn(format="%.2f%%"),
-                "Overall\nChange %": st.column_config.NumberColumn(format="%.2f%%"),
-                "MTF PNL": st.column_config.NumberColumn("MTF PNL", format="%.2f"),
-                "MTF Charges": st.column_config.NumberColumn("MTF Charges", format="%.2f"),
-                "PNL": st.column_config.NumberColumn("Actual PNL", format="%.2f"),
-                "Invested\nAmount": st.column_config.NumberColumn(format="%.2f"),
-                "Current\nValue": st.column_config.NumberColumn(format="%.2f"),
-                "Entry\nPrice": st.column_config.NumberColumn(format="%.2f"),
-                "Qty": st.column_config.NumberColumn(format="%.2f"),
-                "Exit\nPrice": st.column_config.NumberColumn(format="%.2f"),
-            }
-        )
+        # FORM WRAPPER FOR PORTFOLIO
+        with st.form("portfolio_edit_form"):
+            edited_df = st.data_editor(
+                style_portfolio(df_port),
+                use_container_width=True,
+                hide_index=True,
+                column_order=["Stock", "Price", "Today\nChange %", "Overall\nChange %", "MTF PNL", "MTF Charges", "PNL", "Days\nIn", "Invested\nAmount", "Current\nValue", "Entry\nPrice", "Qty", "Entry\nDate", "Exit\nPrice", "Exit\nDate", "Status"],
+                disabled=["Stock", "Price", "Today\nChange %", "Overall\nChange %", "MTF PNL", "MTF Charges", "PNL", "Days\nIn", "Invested\nAmount", "Current\nValue", "Entry\nPrice", "Qty", "Entry\nDate"],
+                column_config={
+                    "_row_idx": None,
+                    "Status": st.column_config.SelectboxColumn("Status", options=["Live", "Exited"], required=True),
+                    "Exit\nDate": st.column_config.DateColumn("Exit\nDate", format="YYYY-MM-DD", help="Double-click for Calendar"),
+                    "Price": st.column_config.NumberColumn(format="%.2f"),
+                    "Today\nChange %": st.column_config.NumberColumn(format="%.2f%%"),
+                    "Overall\nChange %": st.column_config.NumberColumn(format="%.2f%%"),
+                    "MTF PNL": st.column_config.NumberColumn("MTF PNL", format="%.2f"),
+                    "MTF Charges": st.column_config.NumberColumn("MTF Charges", format="%.2f"),
+                    "PNL": st.column_config.NumberColumn("Actual PNL", format="%.2f"),
+                    "Invested\nAmount": st.column_config.NumberColumn(format="%.2f"),
+                    "Current\nValue": st.column_config.NumberColumn(format="%.2f"),
+                    "Entry\nPrice": st.column_config.NumberColumn(format="%.2f"),
+                    "Qty": st.column_config.NumberColumn(format="%.2f"),
+                    "Exit\nPrice": st.column_config.NumberColumn(format="%.2f"),
+                }
+            )
+            submitted_portfolio = st.form_submit_button("💾 Save Exit/Status Edits")
 
-        if st.button("💾 Save Exit/Status Edits"):
+        if submitted_portfolio:
             with st.spinner("Syncing updates to Google Sheets..."):
                 for index, row in edited_df.iterrows():
                     gs_row = row["_row_idx"]
                     orig_record = next((item for item in st.session_state.portfolio_data if item["row_idx"] == gs_row), None)
                     
                     if orig_record:
-                        if orig_record["status"] != row["Status"] or orig_record["exit_price"] != row["Exit\nPrice"] or orig_record["exit_date"] != row["Exit\nDate"]:
+                        # Extract string from calendar date object smoothly
+                        new_exit_date_str = str(row["Exit\nDate"]) if pd.notnull(row["Exit\nDate"]) else ""
+                        
+                        if orig_record["status"] != row["Status"] or orig_record["exit_price"] != row["Exit\nPrice"] or orig_record["exit_date"] != new_exit_date_str:
                             port_sheet.update_cell(gs_row, 5, str(row["Exit\nPrice"]) if pd.notnull(row["Exit\nPrice"]) else "")
-                            port_sheet.update_cell(gs_row, 6, str(row["Exit\nDate"]) if pd.notnull(row["Exit\nDate"]) else "")
+                            port_sheet.update_cell(gs_row, 6, new_exit_date_str)
                             port_sheet.update_cell(gs_row, 7, row["Status"])
                 
                 del st.session_state.portfolio_data
@@ -763,7 +764,6 @@ def fetch_all_scanners_cached(watchlist_tuple, portfolio_tuple, gtt_tuple):
                     sell_rows.append(sell_row)
                     
             elif not is_gtt:
-                # Screeners - ONLY if not in GTT
                 d_bulls = sum(1 for k in ["ema", "macd", "st", "rsi"] if sig_d and sig_d[k] == "Bullish")
                 w_bulls = sum(1 for k in ["ema", "macd", "st", "rsi"] if sig_w and sig_w[k] == "Bullish")
                 m_bulls = sum(1 for k in ["ema", "macd", "st", "rsi"] if sig_m and sig_m[k] == "Bullish")
@@ -899,6 +899,7 @@ with tab_gtt:
                     current_price = round(hist["Close"].iloc[-1], 2)
             except: pass
             
+            # Use None for empty strings so Streamlit's DateColumn renders them as completely blank
             gtt_rows.append({
                 "_row_idx": g["row_idx"],
                 "Stock": name,
@@ -908,8 +909,8 @@ with tab_gtt:
                 "Condition-1": g["condition_1"],
                 "Price Alert-2": g["price_alert_2"],
                 "Condition-2": g["condition_2"],
-                "Date Alert-1": g["date_alert_1"],
-                "Date Alert-2": g["date_alert_2"]
+                "Date Alert-1": g["date_alert_1"] if str(g["date_alert_1"]).strip() else None,
+                "Date Alert-2": g["date_alert_2"] if str(g["date_alert_2"]).strip() else None
             })
             
         df_gtt = pd.DataFrame(gtt_rows)
@@ -935,18 +936,20 @@ with tab_gtt:
                     colors[row.index.get_loc("Price Alert-2")] = 'background-color: #FFEBEE; color: #D32F2F; font-weight: bold;'
                     colors[row.index.get_loc("Condition-2")] = 'background-color: #FFEBEE; color: #D32F2F; font-weight: bold;'
                 
-                # Highlight logic for Dates
-                d1_str = row["Date Alert-1"]
-                if d1_str:
+                # Date parser that gracefully handles both strings and actual date objects
+                d1_val = row["Date Alert-1"]
+                if pd.notnull(d1_val):
                     try:
-                        if datetime.strptime(d1_str, "%Y-%m-%d").date() <= today_date:
+                        d1_date = pd.to_datetime(d1_val).date()
+                        if d1_date <= today_date:
                             colors[row.index.get_loc("Date Alert-1")] = 'background-color: #FFEBEE; color: #D32F2F; font-weight: bold;'
                     except: pass
                 
-                d2_str = row["Date Alert-2"]
-                if d2_str:
+                d2_val = row["Date Alert-2"]
+                if pd.notnull(d2_val):
                     try:
-                        if datetime.strptime(d2_str, "%Y-%m-%d").date() <= today_date:
+                        d2_date = pd.to_datetime(d2_val).date()
+                        if d2_date <= today_date:
                             colors[row.index.get_loc("Date Alert-2")] = 'background-color: #FFEBEE; color: #D32F2F; font-weight: bold;'
                     except: pass
                     
@@ -955,46 +958,53 @@ with tab_gtt:
             return df.style.apply(highlight_alerts, axis=1).set_properties(**{'text-align': 'center'})
 
         st.markdown("---")
-        edited_gtt = st.data_editor(
-            style_gtt_table(df_gtt),
-            use_container_width=True,
-            hide_index=True,
-            column_order=["Stock", "Price", "Notes", "Price Alert-1", "Condition-1", "Price Alert-2", "Condition-2", "Date Alert-1", "Date Alert-2"],
-            disabled=["Stock", "Price"],
-            column_config={
-                "_row_idx": None,
-                "Price": st.column_config.NumberColumn(format="%.2f"),
-                "Notes": st.column_config.TextColumn(width="large"),
-                "Price Alert-1": st.column_config.NumberColumn(format="%.2f"),
-                "Price Alert-2": st.column_config.NumberColumn(format="%.2f"),
-                "Condition-1": st.column_config.SelectboxColumn(options=["", "Crosses Above", "Crosses Below"]),
-                "Condition-2": st.column_config.SelectboxColumn(options=["", "Crosses Above", "Crosses Below"]),
-                "Date Alert-1": st.column_config.TextColumn(help="YYYY-MM-DD"),
-                "Date Alert-2": st.column_config.TextColumn(help="YYYY-MM-DD")
-            }
-        )
         
-        if st.button("💾 Save GTT Edits"):
+        # FORM WRAPPER FOR GTT
+        with st.form("gtt_edit_form"):
+            edited_gtt = st.data_editor(
+                style_gtt_table(df_gtt),
+                use_container_width=True,
+                hide_index=True,
+                column_order=["Stock", "Price", "Notes", "Price Alert-1", "Condition-1", "Price Alert-2", "Condition-2", "Date Alert-1", "Date Alert-2"],
+                disabled=["Stock", "Price"],
+                column_config={
+                    "_row_idx": None,
+                    "Price": st.column_config.NumberColumn(format="%.2f"),
+                    "Notes": st.column_config.TextColumn(width="large"),
+                    "Price Alert-1": st.column_config.NumberColumn(format="%.2f"),
+                    "Price Alert-2": st.column_config.NumberColumn(format="%.2f"),
+                    "Condition-1": st.column_config.SelectboxColumn(options=["", "Crosses Above", "Crosses Below"]),
+                    "Condition-2": st.column_config.SelectboxColumn(options=["", "Crosses Above", "Crosses Below"]),
+                    "Date Alert-1": st.column_config.DateColumn("Date Alert-1", format="YYYY-MM-DD", help="Double-click for Calendar"),
+                    "Date Alert-2": st.column_config.DateColumn("Date Alert-2", format="YYYY-MM-DD", help="Double-click for Calendar")
+                }
+            )
+            submitted_gtt = st.form_submit_button("💾 Save GTT Edits")
+        
+        if submitted_gtt:
             with st.spinner("Syncing GTT updates to Google Sheets..."):
                 for index, row in edited_gtt.iterrows():
                     gs_row = row["_row_idx"]
                     orig = next((item for item in st.session_state.gtt_data if item["row_idx"] == gs_row), None)
                     
                     if orig:
+                        # Extract cleanly formatted string from the calendar date objects
+                        d1_str = str(row["Date Alert-1"]) if pd.notnull(row["Date Alert-1"]) else ""
+                        d2_str = str(row["Date Alert-2"]) if pd.notnull(row["Date Alert-2"]) else ""
+                        
                         if (orig["notes"] != row["Notes"] or 
                             orig["price_alert_1"] != row["Price Alert-1"] or orig["condition_1"] != row["Condition-1"] or
                             orig["price_alert_2"] != row["Price Alert-2"] or orig["condition_2"] != row["Condition-2"] or
-                            orig["date_alert_1"] != row["Date Alert-1"] or orig["date_alert_2"] != row["Date Alert-2"]):
+                            orig["date_alert_1"] != d1_str or orig["date_alert_2"] != d2_str):
                             
-                            # Batch update for speed
                             cell_updates = [
                                 {'range': f'B{gs_row}', 'values': [[str(row["Notes"]) if pd.notnull(row["Notes"]) else ""]]},
                                 {'range': f'C{gs_row}', 'values': [[float(row["Price Alert-1"]) if pd.notnull(row["Price Alert-1"]) else 0.0]]},
                                 {'range': f'D{gs_row}', 'values': [[str(row["Condition-1"]) if pd.notnull(row["Condition-1"]) else ""]]},
                                 {'range': f'E{gs_row}', 'values': [[float(row["Price Alert-2"]) if pd.notnull(row["Price Alert-2"]) else 0.0]]},
                                 {'range': f'F{gs_row}', 'values': [[str(row["Condition-2"]) if pd.notnull(row["Condition-2"]) else ""]]},
-                                {'range': f'G{gs_row}', 'values': [[str(row["Date Alert-1"]) if pd.notnull(row["Date Alert-1"]) else ""]]},
-                                {'range': f'H{gs_row}', 'values': [[str(row["Date Alert-2"]) if pd.notnull(row["Date Alert-2"]) else ""]]}
+                                {'range': f'G{gs_row}', 'values': [[d1_str]]},
+                                {'range': f'H{gs_row}', 'values': [[d2_str]]}
                             ]
                             gtt_sheet.batch_update(cell_updates)
                 
