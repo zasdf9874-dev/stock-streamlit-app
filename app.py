@@ -43,10 +43,16 @@ def get_google_sheets():
     gc = gspread.authorize(credentials)
     
     wl_sheet = gc.open("Watchlist Database").sheet1
+    
     try:
         pt_sheet = gc.open("Watchlist Database").worksheet("Portfolio")
     except gspread.exceptions.WorksheetNotFound:
         pt_sheet = gc.open("Watchlist Database").add_worksheet(title="Portfolio", rows="1000", cols="20")
+        
+    try:
+        gtt_sheet = gc.open("Watchlist Database").worksheet("GTT")
+    except gspread.exceptions.WorksheetNotFound:
+        gtt_sheet = gc.open("Watchlist Database").add_worksheet(title="GTT", rows="1000", cols="20")
     
     if not wl_sheet.get_all_values():
         wl_sheet.append_row(["ticker", "name", "date_added", "entry_price"])
@@ -54,10 +60,13 @@ def get_google_sheets():
     if not pt_sheet.get_all_values():
         pt_sheet.append_row(["ticker", "entry_price", "qty", "entry_date", "exit_price", "exit_date", "status"])
         
-    return wl_sheet, pt_sheet
+    if not gtt_sheet.get_all_values():
+        gtt_sheet.append_row(["ticker", "notes", "price_alert_1", "condition_1", "price_alert_2", "condition_2", "date_alert_1", "date_alert_2"])
+        
+    return wl_sheet, pt_sheet, gtt_sheet
 
 try:
-    db_sheet, port_sheet = get_google_sheets()
+    db_sheet, port_sheet, gtt_sheet = get_google_sheets()
 except Exception as e:
     st.error(f"Failed to connect to Google Sheets. Verify your secrets.toml and share settings. Error: {e}")
     st.stop()
@@ -182,11 +191,37 @@ if "portfolio_data" not in st.session_state:
             })
     st.session_state.portfolio_data = port_records
 
+if "gtt_data" not in st.session_state:
+    raw_gtt = gtt_sheet.get_all_values()
+    gtt_records = []
+    if len(raw_gtt) > 1:
+        for i, row in enumerate(raw_gtt[1:]):
+            if not row or not str(row[0]).strip(): continue
+            row = row + [""] * (8 - len(row)) # Pad empty columns
+            
+            try: p1 = float(row[2]) if row[2].strip() else 0.0
+            except: p1 = 0.0
+            try: p2 = float(row[4]) if row[4].strip() else 0.0
+            except: p2 = 0.0
+            
+            gtt_records.append({
+                "row_idx": i + 2,
+                "ticker": str(row[0]).strip(),
+                "notes": str(row[1]).strip(),
+                "price_alert_1": p1,
+                "condition_1": str(row[3]).strip(),
+                "price_alert_2": p2,
+                "condition_2": str(row[5]).strip(),
+                "date_alert_1": str(row[6]).strip(),
+                "date_alert_2": str(row[7]).strip()
+            })
+    st.session_state.gtt_data = gtt_records
+
 # ---------------------------------------------------------
 # 1. TOP NAVIGATION (TABS)
 # ---------------------------------------------------------
-tab_watchlist, tab_portfolio, tab_sell, tab_buy, tab_strong_up, tab_uptrend, tab_downtrend = st.tabs(
-    ["📋 Watchlist", "💼 Portfolio", "🔴 Sell Stock", "🟢 Buy Signal", "🔥 Strong Uptrend", "📈 Uptrend Stocks", "📉 Downtrend Stocks"]
+tab_watchlist, tab_portfolio, tab_sell, tab_gtt, tab_buy, tab_strong_up, tab_uptrend, tab_downtrend = st.tabs(
+    ["📋 Watchlist", "💼 Portfolio", "🔴 Sell Stock", "🎯 Buying/GTT", "🟢 Buy Signal", "🔥 Strong Uptrend", "📈 Uptrend Stocks", "📉 Downtrend Stocks"]
 )
 
 # ---------------------------------------------------------
@@ -245,6 +280,12 @@ with tab_watchlist:
                             cell = db_sheet.find(delete_symbol)
                             if cell: db_sheet.delete_rows(cell.row)
                             st.session_state.watchlist_data = [item for item in st.session_state.watchlist_data if item.get("ticker") != delete_symbol]
+                            
+                            # Clean up associated GTT if it exists
+                            gtt_cell = gtt_sheet.find(delete_symbol)
+                            if gtt_cell: gtt_sheet.delete_rows(gtt_cell.row)
+                            st.session_state.gtt_data = [g for g in st.session_state.gtt_data if g.get("ticker") != delete_symbol]
+                            
                             st.rerun()
                         except Exception as e: st.error(f"Failed: {e}")
 
@@ -256,6 +297,7 @@ with tab_watchlist:
     if st.button("🔄 Sync with Google Sheets"):
         del st.session_state.watchlist_data
         del st.session_state.portfolio_data
+        del st.session_state.gtt_data
         st.rerun()
 
     def fetch_watchlist_table(items, tf):
@@ -455,7 +497,7 @@ with tab_portfolio:
         
         # --- MTF SIMULATOR MATH (Standard Base 20k -> 4x Leverage = 80k) ---
         mtf_base = 20000.0
-        mtf_invested = mtf_base * 4  # The borrowed 4x amount (₹80,000)
+        mtf_invested = mtf_base * 4  
         mtf_qty = (mtf_invested / entry_price) if entry_price > 0 else 0
         
         if item["status"] == "Live":
@@ -472,9 +514,9 @@ with tab_portfolio:
         overall_change = (actual_pnl / invested) * 100 if invested > 0 else 0
         
         # Calculate MTF outputs
-        mtf_pnl = mtf_gross_current - mtf_invested                   # Gross Profit on the 80k
-        mtf_charges = mtf_invested * 0.0004 * days_in                # Interest (0.04% per day)
-        mtf_current_value = mtf_invested + mtf_pnl - mtf_charges     # Net Current Value
+        mtf_pnl = mtf_gross_current - mtf_invested
+        mtf_charges = mtf_invested * 0.0004 * days_in
+        mtf_current_value = mtf_invested + mtf_pnl - mtf_charges
         
         port_rows.append({
             "_row_idx": item["row_idx"],
@@ -511,25 +553,21 @@ with tab_portfolio:
         if not live_df.empty:
             st.markdown("### 📊 Portfolio Summary")
             
-            # Math: Actual Portfolio
             tot_invested = live_df["Invested\nAmount"].sum()
             tot_current = live_df["Current\nValue"].sum()
             tot_pnl = live_df["PNL"].sum()
             tot_pct = (tot_pnl / tot_invested) * 100 if tot_invested > 0 else 0
             
-            # Math: Weighted Today's Change
             yest_value = (live_df["Current\nValue"] / (1 + (live_df["Today\nChange %"] / 100))).sum()
             today_abs = tot_current - yest_value
             today_pct = (today_abs / yest_value) * 100 if yest_value > 0 else 0
             
-            # Math: MTF Portfolio (4x of standard 20k base)
             mtf_tot_invested = live_df["_mtf_invested"].sum()
             mtf_tot_current = live_df["_mtf_current"].sum()
             mtf_tot_pnl = live_df["_mtf_pnl"].sum()
             mtf_tot_charges = live_df["_mtf_charges"].sum()
             mtf_pct = (mtf_tot_pnl / mtf_tot_invested) * 100 if mtf_tot_invested > 0 else 0
 
-            # UI Logic: Custom HTML to mimic st.metric perfectly
             def metric_html(label, val_str, val_num, delta_str=None, delta_num=None, default_color=False):
                 green_hex = "#09AB3B" 
                 red_hex = "#FF2B2B"
@@ -550,7 +588,6 @@ with tab_portfolio:
                     html += f"<div style='margin-top: 6px;'><span style='background-color: {bg_c}; color: {txt_c}; border-radius: 4px; padding: 2px 6px; font-size: 13px; font-weight: 600;'>{arrow} {delta_str}</span></div>"
                 return html
 
-            # UI: Actual Metrics Row
             st.caption("ACTUAL PORTFOLIO")
             c1, c2, c3, c4 = st.columns(4)
             c1.markdown(metric_html("Invested Amount", f"₹{tot_invested:,.2f}", tot_invested, default_color=True), unsafe_allow_html=True)
@@ -558,9 +595,8 @@ with tab_portfolio:
             c3.markdown(metric_html("Total PNL", f"₹{tot_pnl:,.2f}", tot_pnl, f"{abs(tot_pct):.2f}% Overall", tot_pct), unsafe_allow_html=True)
             c4.markdown(metric_html("Today's Change", f"{today_pct:+.2f}%" if today_pct > 0 else f"{today_pct:.2f}%", today_pct, f"₹{abs(today_abs):.2f} Today", today_abs), unsafe_allow_html=True)
             
-            st.write("") # Vertical spacer
+            st.write("") 
             
-            # UI: MTF Metrics Row
             st.caption("MTF PORTFOLIO (4X LEVERAGE ON ₹20K BASE)")
             pc1, pc2, pc3, pc4 = st.columns(4)
             pc1.markdown(metric_html("MTF Invested", f"₹{mtf_tot_invested:,.2f}", mtf_tot_invested, default_color=True), unsafe_allow_html=True)
@@ -569,9 +605,7 @@ with tab_portfolio:
             pc4.markdown(metric_html("MTF Charges", f"₹{mtf_tot_charges:,.2f}", -1, "Interest (0.04%/day)", -1, default_color=True), unsafe_allow_html=True)
             
             st.markdown("---")
-        # --- END OF SUMMARY METRICS ---
 
-        # --- DATA EDITOR CONFIGURATION ---
         def style_portfolio(df):
             def current_val_color(row):
                 colors = [''] * len(row)
@@ -605,8 +639,8 @@ with tab_portfolio:
                 "Price": st.column_config.NumberColumn(format="%.2f"),
                 "Today\nChange %": st.column_config.NumberColumn(format="%.2f%%"),
                 "Overall\nChange %": st.column_config.NumberColumn(format="%.2f%%"),
-                "MTF PNL": st.column_config.NumberColumn("MTF PNL", format="%.2f", help="Gross PNL on 4x leverage"),
-                "MTF Charges": st.column_config.NumberColumn("MTF Charges", format="%.2f", help="Total accumulated interest at 0.04% per day"),
+                "MTF PNL": st.column_config.NumberColumn("MTF PNL", format="%.2f"),
+                "MTF Charges": st.column_config.NumberColumn("MTF Charges", format="%.2f"),
                 "PNL": st.column_config.NumberColumn("Actual PNL", format="%.2f"),
                 "Invested\nAmount": st.column_config.NumberColumn(format="%.2f"),
                 "Current\nValue": st.column_config.NumberColumn(format="%.2f"),
@@ -638,17 +672,19 @@ with tab_portfolio:
 # CENTRAL MARKET SCANNER (MUTUALLY EXCLUSIVE TABS)
 # ---------------------------------------------------------
 @st.cache_data(ttl=120, show_spinner=False)
-def fetch_all_scanners_cached(watchlist_tuple, portfolio_tuple):
+def fetch_all_scanners_cached(watchlist_tuple, portfolio_tuple, gtt_tuple):
     buy_rows, strong_up_rows, up_rows, down_rows, sell_rows = [], [], [], [], []
     
     wl_dict = dict(watchlist_tuple)
-    port_dict = dict(portfolio_tuple) # Ticker -> Entry Price for Live positions
+    port_dict = dict(portfolio_tuple) 
+    gtt_set = set(gtt_tuple)
     
     all_tickers = set(wl_dict.keys()).union(set(port_dict.keys()))
     
     for ticker in all_tickers:
         name = wl_dict.get(ticker, ticker)
         is_live_portfolio = ticker in port_dict
+        is_gtt = ticker in gtt_set
             
         try:
             stock = yf.Ticker(ticker)
@@ -658,7 +694,6 @@ def fetch_all_scanners_cached(watchlist_tuple, portfolio_tuple):
             
             def calculate_ta_indicators(hist):
                 if hist is None or hist.empty or len(hist) <= 30: return None
-                
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     hist.ta.ema(length=5, append=True)
@@ -672,7 +707,6 @@ def fetch_all_scanners_cached(watchlist_tuple, portfolio_tuple):
                 macds_col = get_safe_col(hist, "MACDs_")
                 
                 if not st_col or not macd_col or not macds_col: return None
-                
                 def eval_row(row):
                     return {
                         "ema": "Bullish" if row.get("EMA_5", 0) > row.get("EMA_13", 0) else "Bearish",
@@ -681,7 +715,6 @@ def fetch_all_scanners_cached(watchlist_tuple, portfolio_tuple):
                         "rsi": "Bullish" if row.get("RSI_14", 0) >= 55 else "Bearish",
                         "price": round(row["Close"], 2)
                     }
-
                 latest_sig = eval_row(hist.iloc[-1])
                 return latest_sig, hist, eval_row
 
@@ -716,13 +749,10 @@ def fetch_all_scanners_cached(watchlist_tuple, portfolio_tuple):
             }
             
             if is_live_portfolio:
-                # 1. Sell Stock Logic (Only for active portfolio holdings)
                 m_bearish = sum(1 for k in ["ema", "macd", "st", "rsi"] if sig_m and sig_m[k] == "Bearish")
-                
                 if m_bearish >= 2:
                     entry_price = port_dict[ticker]
                     overall_pct = ((price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
-                    
                     sell_row = {
                         ("Stock", ""): name,
                         ("Price ($/₹)", ""): price,
@@ -732,8 +762,8 @@ def fetch_all_scanners_cached(watchlist_tuple, portfolio_tuple):
                     }
                     sell_rows.append(sell_row)
                     
-            else:
-                # 2. General Screener Logic (For Watchlist items NOT currently in portfolio)
+            elif not is_gtt:
+                # Screeners - ONLY if not in GTT
                 d_bulls = sum(1 for k in ["ema", "macd", "st", "rsi"] if sig_d and sig_d[k] == "Bullish")
                 w_bulls = sum(1 for k in ["ema", "macd", "st", "rsi"] if sig_w and sig_w[k] == "Bullish")
                 m_bulls = sum(1 for k in ["ema", "macd", "st", "rsi"] if sig_m and sig_m[k] == "Bullish")
@@ -758,20 +788,12 @@ def fetch_all_scanners_cached(watchlist_tuple, portfolio_tuple):
                 is_strong_uptrend = (m_bulls >= 2) and not is_buy
                 is_uptrend = ((d_bulls >= 2) or (w_bulls >= 2)) and not (is_buy or is_strong_uptrend)
 
-                row = {
-                    ("Stock", ""): name,
-                    ("Price ($/₹)", ""): price,
-                    **row_base
-                }
+                row = {("Stock", ""): name, ("Price ($/₹)", ""): price, **row_base}
 
-                if is_buy:
-                    buy_rows.append(row)
-                elif is_strong_uptrend:
-                    strong_up_rows.append(row)
-                elif is_uptrend:
-                    up_rows.append(row)
-                else:
-                    down_rows.append(row) 
+                if is_buy: buy_rows.append(row)
+                elif is_strong_uptrend: strong_up_rows.append(row)
+                elif is_uptrend: up_rows.append(row)
+                else: down_rows.append(row) 
                 
         except Exception:
             continue
@@ -781,8 +803,9 @@ def fetch_all_scanners_cached(watchlist_tuple, portfolio_tuple):
 with st.spinner("Scanning Market Data & Evaluating Timeframes..."):
     watchlist_tuple = tuple((item["ticker"], item.get("name", item["ticker"])) for item in st.session_state.watchlist_data if "ticker" in item)
     portfolio_tuple = tuple((p["ticker"], p["entry_price"]) for p in st.session_state.portfolio_data if p["status"] == "Live")
+    gtt_tuple = tuple([g["ticker"] for g in st.session_state.gtt_data])
     
-    buy_data, strong_up_data, up_data, down_data, sell_data = fetch_all_scanners_cached(watchlist_tuple, portfolio_tuple)
+    buy_data, strong_up_data, up_data, down_data, sell_data = fetch_all_scanners_cached(watchlist_tuple, portfolio_tuple, gtt_tuple)
 
 multi_cols_standard = pd.MultiIndex.from_tuples([
     ("Stock", ""), ("Price ($/₹)", ""),
@@ -821,7 +844,168 @@ with tab_sell:
         st.info("Great news! None of your active portfolio holdings are currently showing 2 or more Monthly Bearish indicators.")
 
 # ---------------------------------------------------------
-# 5. BUY SIGNAL TAB (FRESH REVERSALS)
+# 5. BUYING / GTT TAB
+# ---------------------------------------------------------
+with tab_gtt:
+    st.write("")
+    
+    with st.expander("➕ Manage GTT List (Add / Remove)", expanded=False):
+        c1, c2, c3, c4 = st.columns([1.5, 1, 1.5, 1])
+        
+        with c1:
+            wl_tickers = {w["ticker"]: w["name"] for w in st.session_state.watchlist_data}
+            gtt_tickers = [g["ticker"] for g in st.session_state.gtt_data]
+            available_for_gtt = {t: n for t, n in wl_tickers.items() if t not in gtt_tickers}
+            
+            new_gtt = st.selectbox("Add Stock to GTT:", options=list(available_for_gtt.keys()), index=None, placeholder="Select from Watchlist...", format_func=lambda x: f"{available_for_gtt[x]} ({x})")
+        with c2:
+            st.write(" ")
+            st.write(" ")
+            if st.button("➕ Add to GTT"):
+                if new_gtt:
+                    with st.spinner("Adding..."):
+                        gtt_sheet.append_row([new_gtt, "", "", "", "", "", "", ""])
+                        del st.session_state.gtt_data
+                        st.success(f"Added {new_gtt} to GTT List!")
+                        st.rerun()
+                        
+        with c3:
+            current_gtt = {g["ticker"]: wl_tickers.get(g["ticker"], g["ticker"]) for g in st.session_state.gtt_data}
+            del_gtt = st.selectbox("Remove from GTT:", options=list(current_gtt.keys()), index=None, placeholder="Select to remove...", format_func=lambda x: f"{current_gtt[x]} ({x})")
+        with c4:
+            st.write(" ")
+            st.write(" ")
+            if st.button("❌ Remove"):
+                if del_gtt:
+                    with st.spinner("Removing..."):
+                        record = next((g for g in st.session_state.gtt_data if g["ticker"] == del_gtt), None)
+                        if record:
+                            gtt_sheet.delete_rows(record["row_idx"])
+                            del st.session_state.gtt_data
+                            st.success(f"Removed {del_gtt}. It is now back in standard scanners.")
+                            st.rerun()
+
+    if st.session_state.gtt_data:
+        gtt_rows = []
+        for g in st.session_state.gtt_data:
+            ticker = g["ticker"]
+            name = next((w["name"] for w in st.session_state.watchlist_data if w["ticker"] == ticker), ticker)
+            
+            current_price = 0.0
+            try:
+                stock = yf.Ticker(ticker)
+                hist = stock.history(period="1d").dropna(subset=["Close"])
+                if not hist.empty:
+                    current_price = round(hist["Close"].iloc[-1], 2)
+            except: pass
+            
+            gtt_rows.append({
+                "_row_idx": g["row_idx"],
+                "Stock": name,
+                "Price": current_price,
+                "Notes": g["notes"],
+                "Price Alert-1": g["price_alert_1"],
+                "Condition-1": g["condition_1"],
+                "Price Alert-2": g["price_alert_2"],
+                "Condition-2": g["condition_2"],
+                "Date Alert-1": g["date_alert_1"],
+                "Date Alert-2": g["date_alert_2"]
+            })
+            
+        df_gtt = pd.DataFrame(gtt_rows)
+        
+        def style_gtt_table(df):
+            today_date = datetime.today().date()
+            
+            def highlight_alerts(row):
+                colors = [''] * len(row)
+                price = row["Price"]
+                
+                # Highlight logic for Alert 1
+                c1 = row["Condition-1"]
+                p1 = row["Price Alert-1"]
+                if (c1 == "Crosses Above" and price >= p1 and p1 > 0) or (c1 == "Crosses Below" and price <= p1 and p1 > 0):
+                    colors[row.index.get_loc("Price Alert-1")] = 'background-color: #FFEBEE; color: #D32F2F; font-weight: bold;'
+                    colors[row.index.get_loc("Condition-1")] = 'background-color: #FFEBEE; color: #D32F2F; font-weight: bold;'
+                
+                # Highlight logic for Alert 2
+                c2 = row["Condition-2"]
+                p2 = row["Price Alert-2"]
+                if (c2 == "Crosses Above" and price >= p2 and p2 > 0) or (c2 == "Crosses Below" and price <= p2 and p2 > 0):
+                    colors[row.index.get_loc("Price Alert-2")] = 'background-color: #FFEBEE; color: #D32F2F; font-weight: bold;'
+                    colors[row.index.get_loc("Condition-2")] = 'background-color: #FFEBEE; color: #D32F2F; font-weight: bold;'
+                
+                # Highlight logic for Dates
+                d1_str = row["Date Alert-1"]
+                if d1_str:
+                    try:
+                        if datetime.strptime(d1_str, "%Y-%m-%d").date() <= today_date:
+                            colors[row.index.get_loc("Date Alert-1")] = 'background-color: #FFEBEE; color: #D32F2F; font-weight: bold;'
+                    except: pass
+                
+                d2_str = row["Date Alert-2"]
+                if d2_str:
+                    try:
+                        if datetime.strptime(d2_str, "%Y-%m-%d").date() <= today_date:
+                            colors[row.index.get_loc("Date Alert-2")] = 'background-color: #FFEBEE; color: #D32F2F; font-weight: bold;'
+                    except: pass
+                    
+                return colors
+                
+            return df.style.apply(highlight_alerts, axis=1).set_properties(**{'text-align': 'center'})
+
+        st.markdown("---")
+        edited_gtt = st.data_editor(
+            style_gtt_table(df_gtt),
+            use_container_width=True,
+            hide_index=True,
+            column_order=["Stock", "Price", "Notes", "Price Alert-1", "Condition-1", "Price Alert-2", "Condition-2", "Date Alert-1", "Date Alert-2"],
+            disabled=["Stock", "Price"],
+            column_config={
+                "_row_idx": None,
+                "Price": st.column_config.NumberColumn(format="%.2f"),
+                "Notes": st.column_config.TextColumn(width="large"),
+                "Price Alert-1": st.column_config.NumberColumn(format="%.2f"),
+                "Price Alert-2": st.column_config.NumberColumn(format="%.2f"),
+                "Condition-1": st.column_config.SelectboxColumn(options=["", "Crosses Above", "Crosses Below"]),
+                "Condition-2": st.column_config.SelectboxColumn(options=["", "Crosses Above", "Crosses Below"]),
+                "Date Alert-1": st.column_config.TextColumn(help="YYYY-MM-DD"),
+                "Date Alert-2": st.column_config.TextColumn(help="YYYY-MM-DD")
+            }
+        )
+        
+        if st.button("💾 Save GTT Edits"):
+            with st.spinner("Syncing GTT updates to Google Sheets..."):
+                for index, row in edited_gtt.iterrows():
+                    gs_row = row["_row_idx"]
+                    orig = next((item for item in st.session_state.gtt_data if item["row_idx"] == gs_row), None)
+                    
+                    if orig:
+                        if (orig["notes"] != row["Notes"] or 
+                            orig["price_alert_1"] != row["Price Alert-1"] or orig["condition_1"] != row["Condition-1"] or
+                            orig["price_alert_2"] != row["Price Alert-2"] or orig["condition_2"] != row["Condition-2"] or
+                            orig["date_alert_1"] != row["Date Alert-1"] or orig["date_alert_2"] != row["Date Alert-2"]):
+                            
+                            # Batch update for speed
+                            cell_updates = [
+                                {'range': f'B{gs_row}', 'values': [[str(row["Notes"]) if pd.notnull(row["Notes"]) else ""]]},
+                                {'range': f'C{gs_row}', 'values': [[float(row["Price Alert-1"]) if pd.notnull(row["Price Alert-1"]) else 0.0]]},
+                                {'range': f'D{gs_row}', 'values': [[str(row["Condition-1"]) if pd.notnull(row["Condition-1"]) else ""]]},
+                                {'range': f'E{gs_row}', 'values': [[float(row["Price Alert-2"]) if pd.notnull(row["Price Alert-2"]) else 0.0]]},
+                                {'range': f'F{gs_row}', 'values': [[str(row["Condition-2"]) if pd.notnull(row["Condition-2"]) else ""]]},
+                                {'range': f'G{gs_row}', 'values': [[str(row["Date Alert-1"]) if pd.notnull(row["Date Alert-1"]) else ""]]},
+                                {'range': f'H{gs_row}', 'values': [[str(row["Date Alert-2"]) if pd.notnull(row["Date Alert-2"]) else ""]]}
+                            ]
+                            gtt_sheet.batch_update(cell_updates)
+                
+                del st.session_state.gtt_data
+                st.success("GTT Updates saved!")
+                st.rerun()
+    else:
+        st.info("Your GTT list is currently empty. Add a stock from your Watchlist using the menu above.")
+
+# ---------------------------------------------------------
+# 6. BUY SIGNAL TAB (FRESH REVERSALS)
 # ---------------------------------------------------------
 with tab_buy:
     st.write("")
@@ -833,7 +1017,7 @@ with tab_buy:
         st.info("No stocks in your watchlist currently meet the fresh 3-Month Reversal Buy Signal criteria.")
 
 # ---------------------------------------------------------
-# 6. STRONG UPTREND TAB (ESTABLISHED MONTHLY BULLS)
+# 7. STRONG UPTREND TAB (ESTABLISHED MONTHLY BULLS)
 # ---------------------------------------------------------
 with tab_strong_up:
     st.write("")
@@ -845,7 +1029,7 @@ with tab_strong_up:
         st.info("No stocks in your watchlist currently meet the Strong Uptrend conditions.")
 
 # ---------------------------------------------------------
-# 7. UPTREND STOCKS TAB
+# 8. UPTREND STOCKS TAB
 # ---------------------------------------------------------
 with tab_uptrend:
     st.write("")
@@ -857,7 +1041,7 @@ with tab_uptrend:
         st.info("No stocks in your watchlist currently meet the Uptrend conditions.")
 
 # ---------------------------------------------------------
-# 8. DOWNTREND STOCKS TAB
+# 9. DOWNTREND STOCKS TAB
 # ---------------------------------------------------------
 with tab_downtrend:
     st.write("")
